@@ -36,63 +36,57 @@ jobs:
 
       - name: Get PR diff
         run: |
-          DIFF=$(gh pr diff ${{ github.event.pull_request.number }} --patch 2>/dev/null || git diff origin/${{ github.base_ref }}...HEAD)
-          echo "$DIFF" | head -c ${{ inputs.max-diff-size }} > /tmp/pr_diff.patch
+          DIFF=$(gh pr diff "${PR_NUMBER}" --patch 2>/dev/null || git diff "origin/${BASE_REF}...HEAD")
+          echo "$DIFF" | head -c "${MAX_DIFF_SIZE}" > /tmp/pr_diff.patch
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.base_ref }}
+          MAX_DIFF_SIZE: ${{ inputs.max-diff-size }}
 
       - name: AI Review with Claude
         run: |
           DIFF=$(cat /tmp/pr_diff.patch)
 
-          if [ "${{ inputs.language }}" = "ko" ]; then
-            LANG_INSTRUCTION="Use Korean (한국어) for the review. Format: 요약, 주요 발견사항, 제안사항. Rate: ✅ 승인 추천 / ⚠️ 수정 필요 / ❌ 재작성 필요"
+          if [ "$REVIEW_LANGUAGE" = "ko" ]; then
+            LANG_INSTRUCTION="Use Korean for the review. Format: 요약, 주요 발견사항, 제안사항. Rate: 승인 추천 / 수정 필요 / 재작성 필요"
           else
-            LANG_INSTRUCTION="Use English for the review. Format: Summary, Key Findings, Suggestions. Rate: ✅ Approve / ⚠️ Changes Needed / ❌ Rewrite Needed"
+            LANG_INSTRUCTION="Use English for the review. Format: Summary, Key Findings, Suggestions. Rate: Approve / Changes Needed / Rewrite Needed"
           fi
-
-          PROMPT="You are an expert code reviewer. Review this Pull Request.
-
-          ## PR: ${{ github.event.pull_request.title }}
-
-          ## Description
-          ${{ github.event.pull_request.body }}
-
-          ## Diff
-          \`\`\`diff
-          ${DIFF}
-          \`\`\`
-
-          ## Instructions
-          - Focus on bugs, security issues, logic errors
-          - Note missing error handling
-          - Check performance issues
-          - Keep feedback concise and actionable
-          - ${LANG_INSTRUCTION}"
 
           RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
             -H "Content-Type: application/json" \
             -H "x-api-key: ${ANTHROPIC_API_KEY}" \
             -H "anthropic-version: 2023-06-01" \
             -d "$(jq -n \
-              --arg prompt "$PROMPT" \
-              --arg model "${{ inputs.model }}" \
+              --arg title "$PR_TITLE" \
+              --arg body "$PR_BODY" \
+              --arg diff "$DIFF" \
+              --arg lang "$LANG_INSTRUCTION" \
+              --arg model "$CLAUDE_MODEL" \
               '{
                 model: $model,
                 max_tokens: 4096,
-                messages: [{role: "user", content: $prompt}]
+                messages: [{role: "user", content: ("You are an expert code reviewer. Review this Pull Request.\n\n## PR: " + $title + "\n\n## Description\n" + $body + "\n\n## Diff\n```diff\n" + $diff + "\n```\n\n## Instructions\n- Focus on bugs, security issues, logic errors\n- Note missing error handling\n- Check performance issues\n- Keep feedback concise and actionable\n- " + $lang)}]
               }')" | jq -r '.content[0].text // "Review generation failed."')
 
           echo "$RESPONSE" > /tmp/review_comment.md
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REVIEW_LANGUAGE: ${{ inputs.language }}
+          CLAUDE_MODEL: ${{ inputs.model }}
 
       - name: Post review comment
         run: |
-          BODY="## 🤖 AI Code Review
+          BODY=$(cat <<'COMMENT_EOF'
+          ## 🤖 AI Code Review
 
-          $(cat /tmp/review_comment.md)"
-
-          gh pr comment ${{ github.event.pull_request.number }} --body "$BODY"
+          COMMENT_EOF
+          )
+          REVIEW=$(cat /tmp/review_comment.md)
+          gh pr comment "${PR_NUMBER}" --body "${BODY}${REVIEW}"
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}

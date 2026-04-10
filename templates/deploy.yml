@@ -1,0 +1,28 @@
+name: Deploy
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [develop]
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: Skip post-deploy verification
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-__PROJECT_NAME__
+  cancel-in-progress: false
+
+jobs:
+  auto-deploy:
+    if: github.event_name == 'pull_request' && github.event.pull_request.merged == true
+    uses: kimkitae/ci-workflows/.github/workflows/deploy.yml@main
+    with:
+      project-dir: __PROJECT_DIR__
+      services: __SERVICES__
+      branch: develop
+      runner-labels: '["self-hosted", "linux", "__RUNNER_LABEL__"]'
+      backend-health-url: __BACKEND_HEALTH_URL__
+      frontend-health-url: __FRONTEND_HEALTH_URL__

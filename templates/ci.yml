@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  e2e:
+    uses: kimkitae/ci-workflows/.github/workflows/e2e-test.yml@main
+    with:
+      backend-dir: backend
+      frontend-dir: frontend
+      db-name: __DB_NAME__
+      db-user: __DB_USER__
+      db-password: __DB_PASSWORD__
+      backend-port: 4000
+      frontend-port: 3000
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

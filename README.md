@@ -2,11 +2,44 @@
 
 프로젝트에서 재사용 가능한 CI/CD 워크플로우.
 
-## 사용법
+## 빠른 시작 (자동 셋업)
 
-프로젝트의 `.github/workflows/`에 아래 파일들을 추가하세요.
+새 프로젝트에 CI를 적용하려면:
 
-### 1. PR 시 E2E 테스트 + AI 리뷰
+```bash
+bash <(curl -s https://raw.githubusercontent.com/kimkitae/ci-workflows/main/setup.sh)
+```
+
+대화형으로 프로젝트 설정을 입력하면 `.github/workflows/` 파일이 자동 생성됩니다.
+
+## 수동 설정
+
+### 1. AI 코드 리뷰 (PR 시)
+
+> **중요**: `permissions` 블록 필수 (private 레포에서 PR 코멘트 작성에 필요)
+
+```yaml
+# .github/workflows/ai-review.yml
+name: AI Code Review
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches: [develop, main]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  review:
+    uses: kimkitae/ci-workflows/.github/workflows/ai-review.yml@main
+    with:
+      language: ko
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+### 2. E2E 테스트 (PR 시)
 
 ```yaml
 # .github/workflows/ci.yml
@@ -22,18 +55,13 @@ jobs:
       backend-dir: backend
       frontend-dir: frontend
       db-name: my_test_db
-    secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-
-  ai-review:
-    uses: kimkitae/ci-workflows/.github/workflows/ai-review.yml@main
-    with:
-      language: ko
+      db-user: myuser
+      db-password: mypass
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-### 2. PR 머지 시 자동 배포
+### 3. 자동 배포 (PR 머지 시)
 
 ```yaml
 # .github/workflows/deploy.yml
@@ -68,3 +96,8 @@ jobs:
 | Secret | 용도 | 필수 |
 |--------|------|------|
 | `ANTHROPIC_API_KEY` | AI 리뷰, E2E 테스트 시 AI 기능 | ai-review: 필수 |
+
+## 주의사항
+
+- **Private 레포**: `ai-review.yml` caller에 `permissions: pull-requests: write` 필수
+- **AI Review와 CI 분리**: AI Review는 별도 워크플로우로 분리 권장 (ci.yml에 합치면 permissions 충돌)
