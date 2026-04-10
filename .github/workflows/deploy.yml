@@ -1,0 +1,85 @@
+name: Deploy (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      project-dir:
+        description: 'Absolute path to project on deploy server'
+        type: string
+        required: true
+      services:
+        description: 'Space-separated docker compose services to deploy'
+        type: string
+        default: ''
+      branch:
+        description: 'Branch to deploy'
+        type: string
+        default: 'develop'
+      backend-health-url:
+        description: 'Backend health check URL'
+        type: string
+        default: ''
+      frontend-health-url:
+        description: 'Frontend health check URL'
+        type: string
+        default: ''
+      runner-labels:
+        description: 'Self-hosted runner labels (JSON array)'
+        type: string
+        default: '["self-hosted", "linux"]'
+      health-retries:
+        description: 'Number of health check retries'
+        type: number
+        default: 30
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ${{ fromJSON(inputs.runner-labels) }}
+    timeout-minutes: 30
+    steps:
+      - name: Pull latest code
+        run: |
+          cd ${{ inputs.project-dir }}
+          git fetch origin ${{ inputs.branch }}
+          git checkout ${{ inputs.branch }}
+          git pull origin ${{ inputs.branch }}
+
+      - name: Build and deploy
+        run: |
+          cd ${{ inputs.project-dir }}
+          if [ -n "${{ inputs.services }}" ]; then
+            DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 \
+              docker compose build --no-cache ${{ inputs.services }}
+            DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 \
+              docker compose up -d --force-recreate ${{ inputs.services }}
+          else
+            DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 \
+              docker compose build --no-cache
+            DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1 \
+              docker compose up -d --force-recreate
+          fi
+
+      - name: Health check
+        if: inputs.backend-health-url != '' || inputs.frontend-health-url != ''
+        run: |
+          check_health() {
+            local url=$1 name=$2
+            echo "Waiting for ${name}..."
+            for i in $(seq 1 ${{ inputs.health-retries }}); do
+              if curl -sf "$url" > /dev/null 2>&1; then
+                echo "✓ ${name} is healthy"
+                return 0
+              fi
+              if [ "$i" -eq ${{ inputs.health-retries }} ]; then
+                echo "✗ ${name} health check timed out"
+                return 1
+              fi
+              echo "  attempt $i/${{ inputs.health-retries }}..."
+              sleep 5
+            done
+          }
+
+          [ -n "${{ inputs.backend-health-url }}" ] && check_health "${{ inputs.backend-health-url }}" "Backend"
+          [ -n "${{ inputs.frontend-health-url }}" ] && check_health "${{ inputs.frontend-health-url }}" "Frontend"
+          echo "✓ Deployment complete"

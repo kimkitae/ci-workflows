@@ -1,0 +1,98 @@
+name: AI Code Review (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: 'Review comment language (ko, en, ja, etc.)'
+        type: string
+        default: 'ko'
+      model:
+        description: 'Claude model to use'
+        type: string
+        default: 'claude-sonnet-4-20250514'
+      max-diff-size:
+        description: 'Max diff size in bytes'
+        type: number
+        default: 80000
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  review:
+    name: Claude AI Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR diff
+        run: |
+          DIFF=$(gh pr diff ${{ github.event.pull_request.number }} --patch 2>/dev/null || git diff origin/${{ github.base_ref }}...HEAD)
+          echo "$DIFF" | head -c ${{ inputs.max-diff-size }} > /tmp/pr_diff.patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: AI Review with Claude
+        run: |
+          DIFF=$(cat /tmp/pr_diff.patch)
+
+          if [ "${{ inputs.language }}" = "ko" ]; then
+            LANG_INSTRUCTION="Use Korean (한국어) for the review. Format: 요약, 주요 발견사항, 제안사항. Rate: ✅ 승인 추천 / ⚠️ 수정 필요 / ❌ 재작성 필요"
+          else
+            LANG_INSTRUCTION="Use English for the review. Format: Summary, Key Findings, Suggestions. Rate: ✅ Approve / ⚠️ Changes Needed / ❌ Rewrite Needed"
+          fi
+
+          PROMPT="You are an expert code reviewer. Review this Pull Request.
+
+          ## PR: ${{ github.event.pull_request.title }}
+
+          ## Description
+          ${{ github.event.pull_request.body }}
+
+          ## Diff
+          \`\`\`diff
+          ${DIFF}
+          \`\`\`
+
+          ## Instructions
+          - Focus on bugs, security issues, logic errors
+          - Note missing error handling
+          - Check performance issues
+          - Keep feedback concise and actionable
+          - ${LANG_INSTRUCTION}"
+
+          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+            -H "anthropic-version: 2023-06-01" \
+            -d "$(jq -n \
+              --arg prompt "$PROMPT" \
+              --arg model "${{ inputs.model }}" \
+              '{
+                model: $model,
+                max_tokens: 4096,
+                messages: [{role: "user", content: $prompt}]
+              }')" | jq -r '.content[0].text // "Review generation failed."')
+
+          echo "$RESPONSE" > /tmp/review_comment.md
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Post review comment
+        run: |
+          BODY="## 🤖 AI Code Review
+
+          $(cat /tmp/review_comment.md)"
+
+          gh pr comment ${{ github.event.pull_request.number }} --body "$BODY"
+        env:
+          GH_TOKEN: ${{ github.token }}

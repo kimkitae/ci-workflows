@@ -1,0 +1,153 @@
+name: E2E Tests (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: '20'
+      backend-dir:
+        type: string
+        default: 'backend'
+      frontend-dir:
+        type: string
+        default: 'frontend'
+      backend-port:
+        type: number
+        default: 4000
+      frontend-port:
+        type: number
+        default: 3000
+      test-files:
+        description: 'Space-separated list of test files to run'
+        type: string
+        default: ''
+      db-name:
+        type: string
+        default: 'test_db'
+      db-user:
+        type: string
+        default: 'testuser'
+      db-password:
+        type: string
+        default: 'testpass'
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      OPENAI_API_KEY:
+        required: false
+
+jobs:
+  e2e:
+    name: Playwright E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ${{ inputs.db-user }}
+          POSTGRES_PASSWORD: ${{ inputs.db-password }}
+          POSTGRES_DB: ${{ inputs.db-name }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://${{ inputs.db-user }}:${{ inputs.db-password }}@localhost:5432/${{ inputs.db-name }}
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: ci-test-secret-not-for-production
+      PORT: ${{ inputs.backend-port }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      NODE_ENV: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: |
+            ${{ inputs.backend-dir }}/package-lock.json
+            package-lock.json
+
+      - name: Install backend dependencies
+        run: npm --prefix ${{ inputs.backend-dir }} ci
+
+      - name: Generate Prisma client
+        run: npm --prefix ${{ inputs.backend-dir }} run db:generate
+
+      - name: Push schema to test database
+        run: npm --prefix ${{ inputs.backend-dir }} run db:push
+
+      - name: Seed database
+        run: npm --prefix ${{ inputs.backend-dir }} run db:seed
+        continue-on-error: true
+
+      - name: Start backend server
+        run: npx --prefix ${{ inputs.backend-dir }} tsx ${{ inputs.backend-dir }}/src/index.ts &
+
+      - name: Install frontend dependencies
+        run: npm --prefix ${{ inputs.frontend-dir }} ci
+
+      - name: Build frontend
+        run: npm --prefix ${{ inputs.frontend-dir }} run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:${{ inputs.backend-port }}
+          NEXT_PUBLIC_WS_URL: ws://localhost:${{ inputs.backend-port }}
+
+      - name: Start frontend server
+        run: npm --prefix ${{ inputs.frontend-dir }} start &
+        env:
+          PORT: ${{ inputs.frontend-port }}
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Wait for backend
+        run: npx wait-on http://localhost:${{ inputs.backend-port }}/api/health -t 30000
+
+      - name: Wait for frontend
+        run: npx wait-on http://localhost:${{ inputs.frontend-port }} -t 60000
+
+      - name: Run E2E tests
+        run: |
+          if [ -n "${{ inputs.test-files }}" ]; then
+            npx playwright test ${{ inputs.test-files }}
+          else
+            npx playwright test
+          fi
+        env:
+          API_URL: http://localhost:${{ inputs.backend-port }}
+          FRONTEND_URL: http://localhost:${{ inputs.frontend-port }}
+          CI: 'true'
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-${{ github.run_id }}
+          path: playwright-report/
+          retention-days: 14
