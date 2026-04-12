@@ -1,92 +1,91 @@
-name: AI Code Review (Reusable)
+name: AI Code Review (Reusable, with auto-fix)
+
+# Reusable AI code review workflow with automatic fix loop.
+#
+# Usage from a caller repo:
+#
+#   jobs:
+#     review:
+#       uses: kimkitae/ci-workflows/.github/workflows/ai-review.yml@main
+#       with:
+#         max_iterations: "3"
+#         model: "claude-sonnet-4-5"
+#       secrets:
+#         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+#
+# On every PR open/synchronize:
+#   1. Claude reviews the diff and outputs a Korean verdict.
+#   2. If "평가: 수정 필요" — Claude generates corrected file contents,
+#      the workflow commits + pushes them back to the PR branch.
+#   3. The loop repeats up to max_iterations times.
+#   4. A final comment is posted on the PR.
+#
+# Forks are skipped automatically (no push permission).
 
 on:
   workflow_call:
     inputs:
       language:
-        description: 'Review comment language (ko, en, ja, etc.)'
+        description: 'Review comment language (ko or en)'
         type: string
         default: 'ko'
       model:
         description: 'Claude model to use'
         type: string
-        default: 'claude-sonnet-4-20250514'
-      max-diff-size:
-        description: 'Max diff size in bytes'
+        default: 'claude-sonnet-4-5'
+      max_diff_size:
+        description: 'Max diff size in chars sent to Claude'
         type: number
         default: 80000
+      max_iterations:
+        description: 'Max auto-fix iterations before giving up'
+        type: number
+        default: 3
     secrets:
       ANTHROPIC_API_KEY:
         required: true
 
 permissions:
   pull-requests: write
-  contents: read
+  contents: write
+  issues: write
 
 jobs:
   review:
-    name: Claude AI Review
+    # Fork PRs cannot be auto-fixed (no push permission to the fork)
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
+
     steps:
-      - name: Checkout
+      - name: Checkout caller PR head
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get PR diff
-        run: |
-          DIFF=$(gh pr diff "${PR_NUMBER}" --patch 2>/dev/null || git diff "origin/${BASE_REF}...HEAD")
-          echo "$DIFF" | head -c "${MAX_DIFF_SIZE}" > /tmp/pr_diff.patch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_REF: ${{ github.base_ref }}
-          MAX_DIFF_SIZE: ${{ inputs.max-diff-size }}
+      - name: Checkout ci-workflows for auto-fix script
+        uses: actions/checkout@v4
+        with:
+          repository: kimkitae/ci-workflows
+          ref: main
+          path: .ci-workflows
 
-      - name: AI Review with Claude
-        run: |
-          DIFF=$(cat /tmp/pr_diff.patch)
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-          if [ "$REVIEW_LANGUAGE" = "ko" ]; then
-            LANG_INSTRUCTION="Use Korean for the review. Format: 요약, 주요 발견사항, 제안사항. Rate: 승인 추천 / 수정 필요 / 재작성 필요"
-          else
-            LANG_INSTRUCTION="Use English for the review. Format: Summary, Key Findings, Suggestions. Rate: Approve / Changes Needed / Rewrite Needed"
-          fi
-
-          RESPONSE=$(curl -s https://api.anthropic.com/v1/messages \
-            -H "Content-Type: application/json" \
-            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
-            -H "anthropic-version: 2023-06-01" \
-            -d "$(jq -n \
-              --arg title "$PR_TITLE" \
-              --arg body "$PR_BODY" \
-              --arg diff "$DIFF" \
-              --arg lang "$LANG_INSTRUCTION" \
-              --arg model "$CLAUDE_MODEL" \
-              '{
-                model: $model,
-                max_tokens: 4096,
-                messages: [{role: "user", content: ("You are an expert code reviewer. Review this Pull Request.\n\n## PR: " + $title + "\n\n## Description\n" + $body + "\n\n## Diff\n```diff\n" + $diff + "\n```\n\n## Instructions\n- Focus on bugs, security issues, logic errors\n- Note missing error handling\n- Check performance issues\n- Keep feedback concise and actionable\n- " + $lang)}]
-              }')" | jq -r '.content[0].text // "Review generation failed."')
-
-          echo "$RESPONSE" > /tmp/review_comment.md
+      - name: Run AI review with auto-fix loop
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          REVIEW_LANGUAGE: ${{ inputs.language }}
-          CLAUDE_MODEL: ${{ inputs.model }}
-
-      - name: Post review comment
-        run: |
-          BODY=$(cat <<'COMMENT_EOF'
-          ## 🤖 AI Code Review
-
-          COMMENT_EOF
-          )
-          REVIEW=$(cat /tmp/review_comment.md)
-          gh pr comment "${PR_NUMBER}" --body "${BODY}${REVIEW}"
-        env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          MAX_FIX_ITERATIONS: ${{ inputs.max_iterations }}
+          MAX_DIFF_SIZE: ${{ inputs.max_diff_size }}
+          CLAUDE_MODEL: ${{ inputs.model }}
+          REVIEW_LANGUAGE: ${{ inputs.language }}
+        run: node .ci-workflows/scripts/ai-review-autofix.mjs
