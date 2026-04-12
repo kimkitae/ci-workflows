@@ -178,8 +178,8 @@ Rules:
 
   const user = `Code review (issues to fix):\n${review}\n\nCurrent files:\n\n${fileBlocks}`;
 
-  // Ask for a larger max_tokens so a full replacement fits
-  return await callClaude(system, user, 8192);
+  // Large max_tokens for full file replacements (big PRs need headroom)
+  return await callClaude(system, user, 16384);
 }
 
 function extractJson(raw) {
@@ -288,8 +288,13 @@ async function main() {
       const raw = await generateFixes(review, changedFiles);
       fixMap = extractJson(raw);
     } catch (e) {
-      postComment(`⚠️ AI Code Review: 자동 수정 JSON 파싱 실패 (iteration ${i})\n\n${String(e).slice(0, 400)}`);
-      die(`fix JSON parse failed: ${e.message}`);
+      // Graceful fallback: post the review comment and exit 0 instead of failing.
+      // This happens when the diff is too large for Claude to produce full-file JSON
+      // within the token limit (e.g., big PRs with 1000+ line changes).
+      console.warn(`[ai-review] fix JSON parse failed: ${e.message}`);
+      postComment(`🤖 AI Code Review (iteration ${i}) — '수정 필요' 감지, 자동 수정은 diff가 커서 실패\n\n${review}\n\n> 자동 수정 불가: ${String(e.message).slice(0, 200)}. 수동으로 위 제안사항을 반영해주세요.`);
+      console.log('[ai-review] posted review comment, exiting gracefully');
+      return;
     }
 
     const applied = applyFixes(fixMap);
