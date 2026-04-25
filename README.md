@@ -83,18 +83,52 @@ curl -sSL https://raw.githubusercontent.com/kimkitae/ci-workflows/main/install/h
 - 강제 재실행: `rm .omc/logs/evening-review.$(date +%F).done`
 - 비활성화: hook을 `.claude/settings.json` 에서 제거
 
+## Deploy 서버 부트스트랩 (배포 대상에서 1회 실행)
+
+GitHub Actions 의 `deploy.yml` 이 `ssh DEPLOY_HOST` 로 들어가 `docker compose pull && up -d` 를 돌리려면 서버가 미리 준비되어 있어야 합니다 (레포 clone, `.env`, ghcr.io 로그인). 이 셋업을 한 줄로:
+
+```bash
+# 배포 대상 서버에서 (ssh 들어간 다음):
+curl -sSL https://raw.githubusercontent.com/kimkitae/ci-workflows/main/install/deploy-server-bootstrap.sh \
+  | bash -s -- <owner>/<repo>
+
+# 예:
+curl -sSL https://raw.githubusercontent.com/kimkitae/ci-workflows/main/install/deploy-server-bootstrap.sh \
+  | bash -s -- kimkitae/project-management-system
+```
+
+스크립트가 하는 일 (idempotent — 여러 번 돌려도 안전):
+1. `~/projects/<repo>` 에 clone (이미 있으면 fetch만)
+2. `.env.example` → `.env` 복사 (이미 있으면 건드리지 않음)
+3. `ghcr.io` 로그인 (PAT 입력 받음, public 이미지면 `SKIP_DOCKER_LOGIN=1` 로 스킵)
+4. `docker-compose.prod.yml` 파싱 검증
+
+환경 변수 오버라이드:
+- `DEPLOY_PATH` — clone 위치 (기본 `~/projects/<repo>`)
+- `COMPOSE_FILE` — compose 파일명 (기본 `docker-compose.prod.yml`)
+- `GHCR_USER`, `GHCR_PAT` — 비대화형 로그인용
+- `SKIP_DOCKER_LOGIN=1` — public 이미지일 때
+
+스크립트가 끝나면 dev 머신에서 등록할 GitHub secrets 명령을 그대로 출력해줍니다.
+
 ---
 
 ## 워크플로우 목록
 
-| 워크플로우 | 설명 |
-|-----------|------|
+| 워크플로우 / 스크립트 | 설명 |
+|----------------------|------|
 | `e2e-test.yml` | Playwright E2E 테스트 (Postgres + Redis) |
 | `deploy.yml` | Docker Compose 배포 (self-hosted runner) |
-| `install/harness-review-hooks.sh` | 저녁/주간 회고 Stop hook 설치 |
+| `install/harness-review-hooks.sh` | 저녁/주간 회고 Stop hook 설치 (개발 머신에서) |
+| `install/deploy-server-bootstrap.sh` | 배포 대상 서버 1회 셋업 (clone + .env + ghcr.io 로그인) |
 
 ## 필요한 Secrets
 
 | Secret | 용도 | 필수 |
 |--------|------|------|
 | `ANTHROPIC_API_KEY` | E2E 테스트 시 AI 기능 | 선택 |
+| `DEPLOY_HOST` | `deploy.yml` SSH 대상 hostname/IP | 배포 사용 시 필수 |
+| `DEPLOY_USER` | SSH 사용자 | 배포 사용 시 필수 |
+| `DEPLOY_SSH_KEY` | private key 전체 내용 | 배포 사용 시 필수 |
+| `DEPLOY_PORT` | SSH 포트 (기본 22) | 비표준 포트일 때만 |
+| `DEPLOY_HEALTH_URL` | 배포 후 헬스체크 public URL | 선택 |
