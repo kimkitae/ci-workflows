@@ -39,9 +39,6 @@ BACKEND_HEALTH=${BACKEND_HEALTH:-http://127.0.0.1:8384/health}
 read -rp "Frontend health URL [http://127.0.0.1:8383]: " FRONTEND_HEALTH
 FRONTEND_HEALTH=${FRONTEND_HEALTH:-http://127.0.0.1:8383}
 
-read -rp "Review language (ko/en) [ko]: " REVIEW_LANG
-REVIEW_LANG=${REVIEW_LANG:-ko}
-
 echo ""
 echo "--- Generating workflow files ---"
 
@@ -66,28 +63,6 @@ jobs:
       db-password: ${DB_PASSWORD}
       backend-port: 4000
       frontend-port: 3000
-    secrets:
-      ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
-EOF
-
-# AI Code Review
-cat > .github/workflows/ai-review.yml << EOF
-name: AI Code Review
-
-on:
-  pull_request:
-    types: [opened, synchronize]
-    branches: [develop, main]
-
-permissions:
-  pull-requests: write
-  contents: read
-
-jobs:
-  review:
-    uses: kimkitae/ci-workflows/.github/workflows/ai-review.yml@main
-    with:
-      language: ${REVIEW_LANG}
     secrets:
       ANTHROPIC_API_KEY: \${{ secrets.ANTHROPIC_API_KEY }}
 EOF
@@ -129,11 +104,7 @@ echo "=== Setup Complete ==="
 echo ""
 echo "Created:"
 echo "  .github/workflows/ci.yml        - E2E tests on PR"
-echo "  .github/workflows/ai-review.yml - AI code review on PR"
 echo "  .github/workflows/deploy.yml    - Auto deploy on merge"
-echo ""
-echo "Required GitHub secrets:"
-echo "  ANTHROPIC_API_KEY - for AI code review"
 echo ""
 echo "Next steps:"
 echo "  1. git add .github/workflows/"
