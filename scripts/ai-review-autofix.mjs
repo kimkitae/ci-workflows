@@ -146,17 +146,29 @@ function parseVerdict(review) {
 }
 
 async function generateFixes(review, changedFiles) {
+  const truncatedFiles = [];
+
   const fileBlocks = changedFiles
     .map((f) => {
       try {
         const content = readFileSync(f, 'utf8');
-        return `=== FILE: ${f} ===\n${truncate(content, FILE_CHAR_LIMIT)}`;
+        const wasTruncated = content.length > FILE_CHAR_LIMIT;
+        if (wasTruncated) truncatedFiles.push(f);
+        const displayed = wasTruncated
+          ? truncate(content, FILE_CHAR_LIMIT)
+          : content;
+        const tag = wasTruncated ? ' [TRUNCATED — DO NOT MODIFY]' : '';
+        return `=== FILE: ${f}${tag} ===\n${displayed}`;
       } catch {
         return null;
       }
     })
     .filter(Boolean)
     .join('\n\n');
+
+  const truncatedNote = truncatedFiles.length > 0
+    ? `\n- CRITICAL: The following files are marked [TRUNCATED — DO NOT MODIFY] because they exceed the context window. You MUST NOT include them in the output JSON — they can only be fixed manually: ${truncatedFiles.join(', ')}`
+    : '';
 
   const system = `You are a code-fixing bot. Given a code review and the current file contents, output ONLY a JSON object mapping file paths to their NEW full content.
 
@@ -174,7 +186,7 @@ Rules:
 - Keep TypeScript compiling.
 - Do not introduce new dependencies.
 - Do not rename files or move code between files.
-- Escape newlines and quotes properly for valid JSON.`;
+- Escape newlines and quotes properly for valid JSON.${truncatedNote}`;
 
   const user = `Code review (issues to fix):\n${review}\n\nCurrent files:\n\n${fileBlocks}`;
 
@@ -206,6 +218,17 @@ function applyFixes(fixMap) {
     }
     if (!existsSync(path)) {
       console.warn(`[ai-review] skipping ${path}: file not found`);
+      continue;
+    }
+    // Safety guard: reject if new content is less than 50% of original length.
+    // This catches the case where Claude received a truncated file and wrote
+    // back only the portion it saw, silently deleting the rest.
+    const original = readFileSync(path, 'utf8');
+    if (newContent.length < original.length * 0.5) {
+      console.warn(
+        `[ai-review] skipping ${path}: new content (${newContent.length} chars) is ` +
+        `less than 50% of original (${original.length} chars) — likely truncation damage`
+      );
       continue;
     }
     writeFileSync(path, newContent);
