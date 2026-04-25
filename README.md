@@ -83,6 +83,33 @@ jobs:
       frontend-health-url: http://127.0.0.1:8383
 ```
 
+## Harness Review Hooks (저녁/주간 회고 자동화)
+
+Claude Code Stop hook으로 매일 저녁(평일·토) AI가 직접 `harness-log.md` / `CLAUDE.md` / `.claude/hooks/`를 편집하고, 일요일 저녁에는 주간 sweep까지 수행하도록 설치합니다.
+
+```bash
+# 한 줄 설치
+curl -sSL https://raw.githubusercontent.com/kimkitae/ci-workflows/main/install/harness-review-hooks.sh | bash
+```
+
+추가되는 것:
+
+| 파일 | 역할 |
+|------|------|
+| `.claude/hooks/evening-review-trigger.sh` | Stop hook (DOW 분기, 22시 이후 1회/일) |
+| `docs/evening-review-prompt.md` | 평일 저녁 5단계 AI 플레이북 |
+| `docs/weekly-review-prompt.md` | 일요일용 (daily + 4 weekly sweep) |
+| `.claude/settings.json` | Stop hook 등록 (jq로 안전 머지) |
+
+전제: 프로젝트가 [general-harness](https://github.com/kimkitae/general-harness) 레이아웃을 따른다 (`CLAUDE.md`, `docs/harness-log.md` 존재).
+
+옵션:
+- `EVENING_REVIEW_HOUR=20` 등으로 발화 시각 조정
+- 강제 재실행: `rm .omc/logs/evening-review.$(date +%F).done`
+- 비활성화: hook을 `.claude/settings.json` 에서 제거
+
+---
+
 ## 워크플로우 목록
 
 | 워크플로우 | 설명 |
@@ -90,6 +117,7 @@ jobs:
 | `e2e-test.yml` | Playwright E2E 테스트 (Postgres + Redis) |
 | `ai-review.yml` | Claude AI 코드 리뷰 |
 | `deploy.yml` | Docker Compose 배포 (self-hosted runner) |
+| `install/harness-review-hooks.sh` | 저녁/주간 회고 Stop hook 설치 |
 
 ## 필요한 Secrets
 
